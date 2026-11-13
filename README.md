@@ -63,7 +63,10 @@ hghub-makers/
 ├── hls.min.js                  # 本地 hls.js
 ├── favicon.svg
 ├── cloud-functions/
-│   └── api/[[default]].js      # catch-all 云函数（自包含，无依赖）
+│   ├── api/[[default]].js      # 入口：/api/*（播放解析、上游反代）
+│   ├── proxy/[[default]].js    # 入口：/proxy/*（HLS 中转、封面解密）
+│   ├── health.js               # 入口：/health
+│   └── lib/handler.js          # 共享处理逻辑（三个入口都转到这里）
 ├── server/dev.mjs              # 本地预览：静态优先 + 函数路由
 ├── scripts/
 │   ├── selftest.mjs            # 离线单测（不联网）
