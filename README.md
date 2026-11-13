@@ -8,7 +8,7 @@
 > 产品形态、上游接口、解密协议均来自 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)，版权归上游作者。
 > 本仓库只做 serverless 适配与工程化整理。
 
-当前版本：**1.3.0**
+当前版本：**1.3.1**
 
 ---
 
@@ -57,7 +57,7 @@
 
 ```
 hghub-makers/
-├── index.html                  # 页面结构（无内联脚本/样式）——静态根在仓库根目录
+├── index.html                  # 页面结构（无内联脚本/样式）
 ├── styles.css                  # 样式
 ├── app.js                      # 前端逻辑（单文件 IIFE，按功能分区）
 ├── hls.min.js                  # 本地 hls.js
@@ -68,9 +68,16 @@ hghub-makers/
 ├── scripts/
 │   ├── selftest.mjs            # 离线单测（不联网）
 │   └── livetest.mjs            # 联网联调（真实上游 + CDN）
-├── edgeone.json                # maxDuration + 静态缓存头
+├── edgeone.json                # outputDirectory / maxDuration / 缓存头
 └── package.json
 ```
+
+> **静态文件必须放在仓库根目录。** Makers 的静态根就是仓库根（`outputDirectory`
+> 默认 `.`），没有「`public/` 即静态根」这层约定。早期版本把前端放在 `public/`，
+> 结果函数接口全部 200、而 `/app.js`、`/styles.css`、`/` 一律 404 —— 因为
+> `cloud-functions/` 是按目录约定识别的，与静态根无关。
+> 现在 `edgeone.json` 里显式写了 `"outputDirectory": "."`，避免控制台里残留的
+> 输出目录设置再把路径带偏；`server/dev.mjs` 也改成以仓库根为静态根，本地与线上一致。
 
 前端拆成 HTML / CSS / JS 三个文件，`index.html` 从 1585 行降到 300 行左右：
 样式和脚本可以分别走 HTTP 缓存，改文案不用重新下载 100KB 内联脚本。
@@ -100,8 +107,16 @@ hghub-makers/
 
 1. 登录 [EdgeOne Makers 控制台](https://console.tencentcloud.com/edgeone/makers)。
 2. 新建项目 → 从 Git 仓库导入 → 选本仓库。
-3. 构建配置保持默认（静态根 = 仓库根目录，`edgeone.json` 已把 `outputDirectory` 钉成 `.`；`cloud-functions/` 自动识别函数）。
-4. 部署完成后访问分配的域名。
+3. 构建配置：**构建命令留空，输出目录填 `.`**（`edgeone.json` 里也已经声明了，
+   控制台留空即可；如果控制台被手动改成 `public` / `dist`，会覆盖不生效导致静态 404）。
+4. `cloud-functions/` 会自动识别为函数目录，不需要额外配置。
+5. 部署完成后访问分配的域名，先自查一遍：
+
+```bash
+curl -sI https://你的域名/           | head -1   # 200
+curl -sI https://你的域名/app.js     | grep -i content-type   # text/javascript
+curl -s  https://你的域名/health                  # {"ok":true,...}
+```
 
 CLI：
 
@@ -154,6 +169,10 @@ npm run test:live    # 联网联调：真实上游 + CDN，11 项
 - 分类 25/26/27 在上游当前是空的（只有 24 有内容），前端会显示「该分类暂无内容」。
 - 榜单接口只返回前 20 名且不支持翻页。
 - 本地账号仅存在 `localStorage`，不参与任何服务端校验，用途是记录收藏/历史归属。
+- 静态根是仓库根，所以 `package.json`、`README.md`、`scripts/`、`server/` 这些开发期文件
+  在线上也能被直接下载（不含任何凭证）。介意的话可以加一步 `buildCommand` 把白名单文件
+  拷到 `dist/` 再令 `outputDirectory: "dist"`，但那时要重新确认 `cloud-functions/` 是否
+  仍在仓库根被识别 —— 现阶段优先保证「能跑通」，故保持根目录直出。
 
 ---
 

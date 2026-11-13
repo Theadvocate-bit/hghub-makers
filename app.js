@@ -14,7 +14,7 @@
 
   /* ============================== 常量 ============================== */
 
-  var APP_VERSION = '1.3.0';
+  var APP_VERSION = '1.3.1';
   /* 分享面板里的「下载 App」地址：发新版只改这里 */
   var APK_URL = 'https://github.com/vps1986/hghub-clone/releases/download/v1.2.0.8/HGhub-1.2.0.8.apk';
   /* 本机没带 hls.js 时的兜底 CDN（原版是内联 script 加载，这里改成运行时按需加载） */

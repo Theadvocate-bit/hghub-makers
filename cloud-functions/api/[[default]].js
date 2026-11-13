@@ -2,7 +2,8 @@
  * HGhub · EdgeOne Makers catch-all 云函数
  *
  * 路由前缀：cloud-functions/api/[[default]].js  ->  /api/*、/proxy/*、/health
- * （Makers 静态资源优先，/、/styles.css、/app.js、/hls.min.js 走 public/ 静态托管）
+ * （Makers 静态资源优先，/、/styles.css、/app.js、/hls.min.js 由静态托管处理；
+ *   静态根 = 仓库根目录，不是 public/，所以这些文件就放在仓库根）
  *
  * 它做四件事：
  *   1. POST /api/play     服务端调上游 playback，返回 HLS 清单地址
@@ -21,7 +22,7 @@ import crypto from 'node:crypto';
 
 /* ============================ 常量 ============================ */
 
-const VERSION = '1.3.0';
+const VERSION = '1.3.1';
 const STARTED_AT = Date.now();
 const UPSTREAM = 'https://huangguoai.com';
 const USER_AGENT =

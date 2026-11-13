@@ -6,7 +6,8 @@
  *
  * 路由规则和线上保持一致：
  *   - /api、/api/*、/proxy、/proxy/*、/health  ->  cloud-functions/api/[[default]].js
- *   - 其余路径先找仓库根目录里的静态文件，找不到再回 index.html（仅限无扩展名的路径）
+ *   - 其余路径按静态文件处理，**静态根就是仓库根目录**（Makers 不认 public/，
+ *     线上的 /app.js 取的是仓库根的 app.js），找不到时无扩展名的路径回 index.html
  *
  * 只用 Node 内置模块，无第三方依赖。
  */
@@ -18,14 +19,12 @@ import { fileURLToPath } from 'node:url';
 import { onRequest } from '../cloud-functions/api/[[default]].js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-// 静态资源就在仓库根目录（和 Makers 线上一致，outputDirectory 钉成 "."）。
-const PUBLIC = ROOT;
-// 本地预览时不该被当静态文件暴露出去的东西（工程文件/源码/配置）。
-const HIDDEN = new Set([
-  'cloud-functions', 'server', 'scripts', 'node_modules', '.git',
-  'package.json', 'package-lock.json', 'edgeone.json', 'README.md', '.gitignore',
-]);
+const STATIC_ROOT = ROOT;
 const PORT = Number(process.env.PORT) || 8787;
+
+/** 只在开发期使用、不该被当成静态资源对外暴露的目录/文件 */
+const HIDDEN_DIRS = new Set(['.git', '.github', '.edgeone', 'node_modules', 'cloud-functions', 'server', 'scripts']);
+const HIDDEN_FILES = new Set(['package-lock.json', '.gitignore', '.env']);
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -48,6 +47,14 @@ const FUNCTION_PREFIXES = ['/api', '/api/', '/proxy', '/proxy/', '/health'];
 
 function isFunctionPath(pathname) {
   return FUNCTION_PREFIXES.some((p) => (p.endsWith('/') ? pathname.startsWith(p) : pathname === p || pathname.startsWith(p + '/')));
+}
+
+function isHidden(rel) {
+  const segs = rel.split('/').filter(Boolean);
+  if (!segs.length) return false;
+  if (HIDDEN_DIRS.has(segs[0])) return true;
+  if (HIDDEN_FILES.has(segs[segs.length - 1])) return true;
+  return segs.some((s) => s.startsWith('.'));
 }
 
 async function toRequest(req) {
@@ -78,19 +85,17 @@ async function sendStatic(req, res, pathname, started) {
     return res.end('Bad Request');
   }
 
-  let filePath = path.join(PUBLIC, rel);
-  // 目录穿越防护：拼出来的路径必须仍在站点根里
-  if (path.relative(PUBLIC, filePath).startsWith('..')) {
-    res.statusCode = 403;
-    return res.end('Forbidden');
-  }
-  // 屏蔽工程文件/源码/配置（本地预览不暴露，和线上静态根语义一致）
-  const cleanRel = path.normalize(rel).replace(/^[/\\]+/, ''); // 去掉前导斜杠，否则 split 后首段为空
-  const firstSeg = cleanRel.split(path.sep)[0];
-  if (HIDDEN.has(firstSeg) || firstSeg.startsWith('.')) {
+  if (isHidden(rel)) {
     res.statusCode = 404;
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     return res.end('404 Not Found: ' + rel);
+  }
+
+  let filePath = path.join(STATIC_ROOT, rel);
+  // 目录穿越防护：拼出来的路径必须仍在静态根里
+  if (path.relative(STATIC_ROOT, filePath).startsWith('..')) {
+    res.statusCode = 403;
+    return res.end('Forbidden');
   }
 
   let info = await stat(filePath).catch(() => null);
@@ -106,12 +111,12 @@ async function sendStatic(req, res, pathname, started) {
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
       return res.end('404 Not Found: ' + rel);
     }
-    filePath = path.join(PUBLIC, 'index.html');
+    filePath = path.join(STATIC_ROOT, 'index.html');
     info = await stat(filePath).catch(() => null);
     if (!info) {
       res.statusCode = 500;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      return res.end('index.html 不存在');
+      return res.end('index.html 不存在（静态根 = 仓库根目录）');
     }
   }
 

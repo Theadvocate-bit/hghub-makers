@@ -1,9 +1,26 @@
 {
+  "buildCommand": "",
   "outputDirectory": ".",
   "cloudFunctions": {
     "maxDuration": 60
   },
+  "rewrites": [
+    { "source": "/index", "destination": "/index.html" },
+    { "source": "/public/*", "destination": "/:splat" }
+  ],
   "headers": [
+    {
+      "source": "/*",
+      "headers": [
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    },
+    {
+      "source": "/",
+      "headers": [
+        { "key": "Cache-Control", "value": "no-cache" }
+      ]
+    },
     {
       "source": "/index.html",
       "headers": [

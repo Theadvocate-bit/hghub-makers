@@ -1,6 +1,6 @@
 {
   "name": "hghub-makers",
-  "version": "1.3.0",
+  "version": "1.3.1",
   "private": true,
   "type": "module",
   "description": "HGhub 复刻版在 EdgeOne Makers 上的部署落地：静态前端 + 单个 catch-all 云函数承接播放解析 / HLS 中转（含清单重写）/ 封面解密 / 上游反代",
