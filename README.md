@@ -57,12 +57,11 @@
 
 ```
 hghub-makers/
-├── public/                     # 静态资源（Makers CDN）
-│   ├── index.html              # 页面结构（无内联脚本/样式）
-│   ├── styles.css              # 样式
-│   ├── app.js                  # 前端逻辑（单文件 IIFE，按功能分区）
-│   ├── hls.min.js              # 本地 hls.js
-│   └── favicon.svg
+├── index.html                  # 页面结构（无内联脚本/样式）——静态根在仓库根目录
+├── styles.css                  # 样式
+├── app.js                      # 前端逻辑（单文件 IIFE，按功能分区）
+├── hls.min.js                  # 本地 hls.js
+├── favicon.svg
 ├── cloud-functions/
 │   └── api/[[default]].js      # catch-all 云函数（自包含，无依赖）
 ├── server/dev.mjs              # 本地预览：静态优先 + 函数路由
@@ -101,7 +100,7 @@ hghub-makers/
 
 1. 登录 [EdgeOne Makers 控制台](https://console.tencentcloud.com/edgeone/makers)。
 2. 新建项目 → 从 Git 仓库导入 → 选本仓库。
-3. 构建配置保持默认（`public/` 为静态根，`cloud-functions/` 自动识别函数）。
+3. 构建配置保持默认（静态根 = 仓库根目录，`edgeone.json` 已把 `outputDirectory` 钉成 `.`；`cloud-functions/` 自动识别函数）。
 4. 部署完成后访问分配的域名。
 
 CLI：

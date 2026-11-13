@@ -6,7 +6,7 @@
  *
  * 路由规则和线上保持一致：
  *   - /api、/api/*、/proxy、/proxy/*、/health  ->  cloud-functions/api/[[default]].js
- *   - 其余路径先找 public/ 里的静态文件，找不到再回 index.html（仅限无扩展名的路径）
+ *   - 其余路径先找仓库根目录里的静态文件，找不到再回 index.html（仅限无扩展名的路径）
  *
  * 只用 Node 内置模块，无第三方依赖。
  */
@@ -18,7 +18,13 @@ import { fileURLToPath } from 'node:url';
 import { onRequest } from '../cloud-functions/api/[[default]].js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const PUBLIC = path.join(ROOT, 'public');
+// 静态资源就在仓库根目录（和 Makers 线上一致，outputDirectory 钉成 "."）。
+const PUBLIC = ROOT;
+// 本地预览时不该被当静态文件暴露出去的东西（工程文件/源码/配置）。
+const HIDDEN = new Set([
+  'cloud-functions', 'server', 'scripts', 'node_modules', '.git',
+  'package.json', 'package-lock.json', 'edgeone.json', 'README.md', '.gitignore',
+]);
 const PORT = Number(process.env.PORT) || 8787;
 
 const MIME = {
@@ -73,10 +79,18 @@ async function sendStatic(req, res, pathname, started) {
   }
 
   let filePath = path.join(PUBLIC, rel);
-  // 目录穿越防护：拼出来的路径必须仍在 public/ 里
+  // 目录穿越防护：拼出来的路径必须仍在站点根里
   if (path.relative(PUBLIC, filePath).startsWith('..')) {
     res.statusCode = 403;
     return res.end('Forbidden');
+  }
+  // 屏蔽工程文件/源码/配置（本地预览不暴露，和线上静态根语义一致）
+  const cleanRel = path.normalize(rel).replace(/^[/\\]+/, ''); // 去掉前导斜杠，否则 split 后首段为空
+  const firstSeg = cleanRel.split(path.sep)[0];
+  if (HIDDEN.has(firstSeg) || firstSeg.startsWith('.')) {
+    res.statusCode = 404;
+    res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+    return res.end('404 Not Found: ' + rel);
   }
 
   let info = await stat(filePath).catch(() => null);
@@ -97,7 +111,7 @@ async function sendStatic(req, res, pathname, started) {
     if (!info) {
       res.statusCode = 500;
       res.setHeader('Content-Type', 'text/plain; charset=utf-8');
-      return res.end('public/index.html 不存在');
+      return res.end('index.html 不存在');
     }
   }
 
