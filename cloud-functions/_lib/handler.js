@@ -30,7 +30,7 @@ import crypto from 'node:crypto';
 
 /* ============================ 常量 ============================ */
 
-const VERSION = '1.3.2';
+const VERSION = '1.3.3';
 const STARTED_AT = Date.now();
 const UPSTREAM = 'https://huangguoai.com';
 const USER_AGENT =

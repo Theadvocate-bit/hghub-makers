@@ -14,7 +14,7 @@
 
   /* ============================== 常量 ============================== */
 
-  var APP_VERSION = '1.3.2';
+  var APP_VERSION = '1.3.3';
   /* 分享面板里的「下载 App」地址：发新版只改这里 */
   var APK_URL = 'https://github.com/vps1986/hghub-clone/releases/download/v1.2.0.8/HGhub-1.2.0.8.apk';
   /* 本机没带 hls.js 时的兜底 CDN（原版是内联 script 加载，这里改成运行时按需加载） */
@@ -39,8 +39,15 @@
 
   function fmtN(n) {
     n = +n || 0;
-    if (n >= 100000000) return (n / 100000000).toFixed(1) + '亿';
-    if (n >= 10000) return (n / 10000).toFixed(1) + '万';
+    var one = function (x) {
+      var s = x.toFixed(1);
+      return s.slice(-2) === '.0' ? s.slice(0, -2) : s;
+    };
+    if (n >= 100000000) return one(n / 100000000) + '亿';
+    if (n >= 10000) {
+      var v = n / 10000;
+      return (v >= 100 ? Math.round(v) : one(v)) + '万'; /* 3519万，不是 3519.0万 */
+    }
     return String(n);
   }
 
@@ -1392,31 +1399,53 @@
 
   /* ============================== 榜单 ============================== */
 
+  /* 上游 /api/ranks/:type 只认下面三个 slug（和官网 /ranks/* 的 pill tabs 一致）。
+     like / view / weekly / monthly 之类不存在，上游会返回 {"data":[],"status":0,
+     "msg":"榜单不存在"} —— 前端以前把 slug 写错，四个标签全空。 */
+  var RANK_TYPES = { hot: '热播榜', recommend: '推荐榜', potential: '飙升榜' };
+
   function loadRank(type) {
+    if (!RANK_TYPES[type]) type = 'hot';
+    // 兜底/深链切换时也要把选中态对齐，否则高亮和列表对不上
+    $$('#rankTabs .chip').forEach(function (x) {
+      x.classList.toggle('on', x.getAttribute('data-type') === type);
+    });
+
     var gen = ++rankGen;
     var box = $('#rankList');
+    if (!box) return;
     box.innerHTML = '<div class="empty">加载中…</div>';
 
     api('/api/ranks/' + type).then(function (j) {
       if (gen !== rankGen) return;
       var items = itemsOf(j);
       if (!items.length) {
-        box.innerHTML = '<div class="empty">' + esc((j && j.msg) || '该榜单暂无数据') + '</div>';
+        var msg = (j && j.msg) || '';
+        // 「榜单不存在」是上游下线的意思，不是网络故障：切回热播榜而不是干瞪着空页
+        if (msg.indexOf('不存在') >= 0 && type !== 'hot') {
+          toast('该榜单已下线，已切回热播榜');
+          loadRank('hot');
+          return;
+        }
+        box.innerHTML = '<div class="empty">' + esc(msg || '该榜单暂无数据') + '</div>';
         return;
       }
       box.innerHTML = items.map(function (v, i) {
         var id = vidOf(v);
         var eps = v.episode_count || v.total_episodes || '';
-        var metric = v.metric_label && v.metric_value != null
-          ? v.metric_label + ' ' + fmtN(v.metric_value)
-          : (v.metrics ? '赞 ' + fmtN(v.metrics.like) : '');
+        var m = v.metrics || {};
+        var meta = [];
+        if (v.cate_name) meta.push(v.cate_name);
+        if (v.metric_label && v.metric_value != null) meta.push(v.metric_label + ' ' + fmtN(v.metric_value));
+        if (m.play) meta.push('播放 ' + fmtN(m.play));
+        if (m.like) meta.push('赞 ' + fmtN(m.like));
+        if (eps) meta.push(eps + '集');
+        if (v.score) meta.push((+v.score).toFixed(1) + ' 分');
         return '<div class="rankrow" data-detail="' + id + '" role="button" tabindex="0">' +
-          '<div class="no">' + (i + 1) + '</div>' +
+          '<div class="no">' + (v.rank || (i + 1)) + '</div>' +
           coverImg(v.cover, '', v.title) +
           '<div><h4>' + esc(v.title || '') + '</h4>' +
-          '<p>' + (v.cate_name ? esc(v.cate_name) + ' · ' : '') +
-          (metric ? esc(metric) + (eps ? ' · ' : '') : '') +
-          (eps ? esc(eps) + '集' : '') + '</p></div></div>';
+          '<p>' + esc(meta.join(' · ')) + '</p></div></div>';
       }).join('');
     }).catch(function (err) {
       if (gen !== rankGen) return;
@@ -1720,9 +1749,7 @@
         return;
       }
       if ((el = t.closest('#rankTabs [data-type]'))) {
-        $$('#rankTabs .chip').forEach(function (x) { x.classList.remove('on'); });
-        el.classList.add('on');
-        loadRank(el.getAttribute('data-type'));
+        loadRank(el.getAttribute('data-type')); /* 选中态由 loadRank 统一同步 */
         return;
       }
       if ((el = t.closest('[data-ep]'))) { playEpisode(state.videoId, +el.getAttribute('data-ep')); return; }

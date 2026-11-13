@@ -8,7 +8,7 @@
 > 产品形态、上游接口、解密协议均来自 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)，版权归上游作者。
 > 本仓库只做 serverless 适配与工程化整理。
 
-当前版本：**1.3.2**
+当前版本：**1.3.3**
 
 ---
 
@@ -28,7 +28,8 @@
 
 | 问题 | 说明 | 修复 |
 |---|---|---|
-| **榜单点不动** | 榜单条目字段是 `video_id`，前端只读 `id`，`openDetail(NaN)` | 统一用 `vidOf()` 读取（兼容 `id` / `video_id`） |
+| 榜单点不动 | 榜单条目字段是 `video_id`，前端只读 `id`，`openDetail(NaN)` | 统一用 `vidOf()` 读取（兼容 `id` / `video_id`） |
+| **四个榜单全空** | 前端发 `/api/ranks/like\|view\|weekly\|monthly`，上游根本没有这些 slug，一律返回 `{"data":[],"msg":"榜单不存在"}` | 改成上游实际存在的三类：`hot`(热播) / `recommend`(推荐) / `potential`(飙升)；未知 slug 兜底回 `hot`，`RANK_TYPES` 白名单 + 离线测试锁死 |
 | **分享链接指向别人站点** | 写死 `https://sp1.45678.eu.org/` | 改为当前站点 `location.origin + pathname` |
 | 分享的集数永远是第 1 集 | 分享按钮固定 `ep=1` | 按当前播放集 / 本地进度取 |
 | 深链 `ep=1` 不自动播 | 文案说「直接开播」，实际只停在详情 | `ep >= 1` 都直接起播 |
@@ -136,7 +137,7 @@ hghub-makers/
 D=https://你的域名
 curl -sI $D/          | head -1                              # 200，text/html
 curl -sI $D/app.js    | grep -i content-type                 # text/javascript
-curl -s  $D/health                                            # {"status":"ok","version":"1.3.2",...}
+curl -s  $D/health                                            # {"status":"ok","version":"1.3.3",...}
 curl -sI $D/api/videos?page=1 | grep -i content-type          # application/json
 curl -s  "$D/proxy/m3u8?url=<清单地址>" | head -c 7            # 必须是 #EXTM3U
 curl -sI "$D/proxy/img?url=<封面地址>" | grep -i content-type  # image/jpeg
@@ -164,8 +165,8 @@ edgeone pages deploy
 
 ```bash
 npm run preview      # http://localhost:8787（PORT=8788 可改端口）
-npm test             # 离线单测：清单重写 / 白名单 / 解密 / 路由契约 / 入口检查，27 项
-npm run test:live    # 联网联调：真实上游 + CDN，11 项
+npm test             # 离线单测：清单重写 / 白名单 / 解密 / 路由契约 / 入口检查 / 榜单标签，28 项
+npm run test:live    # 联网联调：真实上游 + CDN，13 项
 ```
 
 `npm test` 不联网、秒级返回，适合每次改完就跑。
@@ -199,7 +200,10 @@ npm run test:live    # 联网联调：真实上游 + CDN，11 项
 - 上游 `playback` 返回的 `cdn.authKey`（`x-cdn-auth`）目前不需要也能取到清单/分片；如某天
   CDN 开始强制校验，需要在 `handleMedia` 里补这个请求头。
 - 分类 25/26/27 在上游当前是空的（只有 24 有内容），前端会显示「该分类暂无内容」。
-- 榜单接口只返回前 20 名且不支持翻页。
+- 榜单接口只返回前 20 名且不支持翻页；且**只有三类**（`hot` 热播榜 / `recommend` 推荐榜 /
+  `potential` 飙升榜，和官网 `/ranks/*` 的 pill tabs 一致）。没有点赞榜、播放榜、周榜、月榜 ——
+  这些 slug 上游直接回「榜单不存在」，所以页面上也不该出现；条目里的 `metrics.like` /
+  `metrics.play` 只是单条附带数据，不能当榜单维度用。
 - 本地账号仅存在 `localStorage`，不参与任何服务端校验，用途是记录收藏/历史归属。
 - 静态根是仓库根，所以 `package.json`、`README.md`、`scripts/`、`server/` 这些开发期文件
   在线上也能被直接下载（不含任何凭证）。介意的话可以加一步 `buildCommand` 把白名单文件

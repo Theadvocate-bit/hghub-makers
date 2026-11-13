@@ -7,7 +7,7 @@
  * 联网联调另有 `npm run test:live`（真实走上游/CDN）。
  */
 import crypto from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -17,6 +17,7 @@ import * as entryProxy from '../cloud-functions/proxy/[[default]].js';
 import * as entryHealth from '../cloud-functions/health.js';
 
 const FUNCTIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../cloud-functions');
+const ROOT = path.resolve(FUNCTIONS_DIR, '..');
 
 const { rewriteManifest, hostAllowed, sniffImage, decryptCover, safeUrl } = __test__;
 
@@ -266,6 +267,30 @@ await testAsync('前端用到的 /proxy/* 都命中了路由而不是 404', asyn
     const res = await call(p + '?url=bad');
     ok(res.status !== 404, `${p} 未命中路由（返回 404，线上会掉进静态兜底）`);
   }
+});
+
+/* ---------------- 榜单标签 ↔ 上游 slug ----------------
+ * 上游 /api/ranks/:type 只认 hot / recommend / potential，写错一个就返回
+ * {"data":[],"msg":"榜单不存在"}，页面表现是「这个榜没数据」。
+ * 这里离线比对 index.html 的标签和 app.js 的白名单，避免再出现幽灵榜单。
+ */
+
+test('榜单标签与 app.js 白名单一一对应', () => {
+  const html = readFileSync(path.join(ROOT, 'index.html'), 'utf8');
+  const js = readFileSync(path.join(ROOT, 'app.js'), 'utf8');
+
+  const at = html.indexOf('id="rankTabs"');
+  ok(at > 0, 'index.html 里找不到 #rankTabs');
+  const block = html.slice(at);
+  const tabs = [...block.slice(0, block.indexOf('</div>')).matchAll(/data-type="([^"]+)"/g)].map((m) => m[1]);
+
+  const decl = js.match(/RANK_TYPES\s*=\s*\{([\s\S]*?)\}/);
+  ok(decl, 'app.js 里找不到 RANK_TYPES 白名单');
+  const allowed = [...decl[1].matchAll(/([A-Za-z_]\w*)\s*:/g)].map((m) => m[1]);
+
+  ok(tabs.length > 0, '没有解析到榜单标签');
+  for (const t of tabs) ok(allowed.includes(t), `标签 ${t} 不在 app.js 白名单里，上游会返回「榜单不存在」`);
+  for (const t of allowed) ok(tabs.includes(t), `白名单里的 ${t} 没有对应标签（死配置）`);
 });
 
 /* ---------------- 汇总 ---------------- */

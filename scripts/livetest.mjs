@@ -156,6 +156,25 @@ await test('上游超时不返回 HTML 500', async () => {
   ok(res.headers.get('content-type').includes('application/json'), '应为 JSON');
 });
 
+await test('榜单三类都有数据（hot / recommend / potential）', async () => {
+  for (const type of ['hot', 'recommend', 'potential']) {
+    const { res, body } = await callJson('/api/ranks/' + type);
+    eq(res.status, 200, type + ' HTTP');
+    const items = (body.data && body.data.items) || [];
+    ok(items.length > 0, `${type} 榜单为空：${body.msg || '无数据'}（上游可能改了 slug）`);
+    const one = items[0];
+    ok(one.video_id || one.id, `${type} 条目缺少 id/video_id`);
+    ok(one.title, `${type} 条目缺少 title`);
+    ok(one.metric_label || one.metrics, `${type} 条目缺少指标字段`);
+  }
+});
+
+await test('榜单不存在的 slug 会被上游明确拒绝（前端不应再发）', async () => {
+  const { body } = await callJson('/api/ranks/like');
+  const items = (body.data && body.data.items) || [];
+  ok(items.length === 0, 'like 榜单居然有数据了，可以重新加回标签');
+});
+
 const total = passed + failures.length;
 console.log(`\n  ${passed}/${total} 通过${failures.length ? '，有失败用例' : ''}\n`);
 process.exit(failures.length ? 1 : 0);
