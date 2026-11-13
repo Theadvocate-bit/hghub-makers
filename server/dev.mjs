@@ -16,7 +16,7 @@ import { readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { onRequest } from '../cloud-functions/api/[[default]].js';
+import { onRequest } from '../cloud-functions/_lib/handler.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const STATIC_ROOT = ROOT;

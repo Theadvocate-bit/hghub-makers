@@ -6,7 +6,7 @@
  *
  * 会消耗上游流量（约 2~3MB），需要联网。
  */
-import { onRequest } from '../cloud-functions/api/[[default]].js';
+import { onRequest } from '../cloud-functions/_lib/handler.js';
 
 let passed = 0;
 const failures = [];

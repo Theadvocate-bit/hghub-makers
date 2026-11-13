@@ -8,7 +8,7 @@
 > 产品形态、上游接口、解密协议均来自 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)，版权归上游作者。
 > 本仓库只做 serverless 适配与工程化整理。
 
-当前版本：**1.3.1**
+当前版本：**1.3.2**
 
 ---
 
@@ -63,10 +63,10 @@ hghub-makers/
 ├── hls.min.js                  # 本地 hls.js
 ├── favicon.svg
 ├── cloud-functions/
-│   ├── api/[[default]].js      # 入口：/api/*（播放解析、上游反代）
-│   ├── proxy/[[default]].js    # 入口：/proxy/*（HLS 中转、封面解密）
-│   ├── health.js               # 入口：/health
-│   └── lib/handler.js          # 共享处理逻辑（三个入口都转到这里）
+│   ├── _lib/handler.js         # 全部实现（`_` 前缀 → 不生成路由，供入口 import）
+│   ├── api/[[default]].js      # 入口 → /api/*
+│   ├── proxy/[[default]].js    # 入口 → /proxy/*
+│   └── health.js               # 入口 → /health
 ├── server/dev.mjs              # 本地预览：静态优先 + 函数路由
 ├── scripts/
 │   ├── selftest.mjs            # 离线单测（不联网）
@@ -88,6 +88,22 @@ hghub-makers/
 ---
 
 ## 承接的路由
+
+**Makers 是「文件即路由」**：URL 由 `cloud-functions/` 的目录结构生成，目录前缀不出现在路径里，
+`[[default]].js` 是通配。所以每个路由前缀都得有对应入口文件，缺一个整段路径就落到静态兜底
+（返回 `index.html`，200 + HTML，看起来「接口挂了」其实函数压根没跑）：
+
+| 入口文件 | 匹配 |
+|---|---|
+| `cloud-functions/api/[[default]].js` | `/api/*` |
+| `cloud-functions/proxy/[[default]].js` | `/proxy/*` |
+| `cloud-functions/health.js` | `/health` |
+| `cloud-functions/_lib/handler.js` | —（`_` 前缀不生成路由，供上面三个 import） |
+
+> v1.3.1 只写了 `api/[[default]].js`，于是 `/proxy/*` 全部掉进静态兜底：`/proxy/m3u8` 返回
+> 14231 字节的 `index.html`、`/proxy/img` 返回 `3c21444f`（`<!DO`）而不是 `ffd8ff`。
+> 本地 `server/dev.mjs` 直接调 `onRequest`，反而一切正常 —— 这类「本地绿、线上错」现在由
+> `npm test` 里的入口检查兜住（缺入口 / 入口没导出 `onRequest` 直接失败）。
 
 | 路由 | 方法 | 作用 |
 |---|---|---|
@@ -113,13 +129,26 @@ hghub-makers/
 3. 构建配置：**构建命令留空，输出目录填 `.`**（`edgeone.json` 里也已经声明了，
    控制台留空即可；如果控制台被手动改成 `public` / `dist`，会覆盖不生效导致静态 404）。
 4. `cloud-functions/` 会自动识别为函数目录，不需要额外配置。
-5. 部署完成后访问分配的域名，先自查一遍：
+5. 部署完成后访问分配的域名，先按这张清单自查一遍（**重点看 content-type 和返回体**，
+   静态兜底会把任何未命中路由的请求变成 `200 + index.html`，光看状态码会被骗）：
 
 ```bash
-curl -sI https://你的域名/           | head -1   # 200
-curl -sI https://你的域名/app.js     | grep -i content-type   # text/javascript
-curl -s  https://你的域名/health                  # {"ok":true,...}
+D=https://你的域名
+curl -sI $D/          | head -1                              # 200，text/html
+curl -sI $D/app.js    | grep -i content-type                 # text/javascript
+curl -s  $D/health                                            # {"status":"ok","version":"1.3.2",...}
+curl -sI $D/api/videos?page=1 | grep -i content-type          # application/json
+curl -s  "$D/proxy/m3u8?url=<清单地址>" | head -c 7            # 必须是 #EXTM3U
+curl -sI "$D/proxy/img?url=<封面地址>" | grep -i content-type  # image/jpeg
 ```
+
+最后两条如果拿到 `<!DOCTYPE` / `text/html`，说明 `/proxy/*` 没进函数 —— 检查
+`cloud-functions/proxy/[[default]].js` 是否存在、是否导出了 `onRequest`。
+
+> 若某次构建报错提示 `_lib/handler.js` 无法解析（不同运行时对相对 import 的支持不同），
+> 降级方案：把 `_lib/handler.js` 的内容整段复制进 `proxy/[[default]].js` 与
+> `health.js`（`api/[[default]].js` 同样处理），即回到「每个入口各自自包含」。
+> 功能等价，只是要同步改三份。
 
 CLI：
 
@@ -135,7 +164,7 @@ edgeone pages deploy
 
 ```bash
 npm run preview      # http://localhost:8787（PORT=8788 可改端口）
-npm test             # 离线单测：清单重写 / 白名单 / 解密 / 路由契约，21 项
+npm test             # 离线单测：清单重写 / 白名单 / 解密 / 路由契约 / 入口检查，27 项
 npm run test:live    # 联网联调：真实上游 + CDN，11 项
 ```
 

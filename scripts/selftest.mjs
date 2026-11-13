@@ -7,8 +7,16 @@
  * 联网联调另有 `npm run test:live`（真实走上游/CDN）。
  */
 import crypto from 'node:crypto';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { onRequest, __test__ } from '../cloud-functions/api/[[default]].js';
+import { onRequest, __test__ } from '../cloud-functions/_lib/handler.js';
+import * as entryApi from '../cloud-functions/api/[[default]].js';
+import * as entryProxy from '../cloud-functions/proxy/[[default]].js';
+import * as entryHealth from '../cloud-functions/health.js';
+
+const FUNCTIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../cloud-functions');
 
 const { rewriteManifest, hostAllowed, sniffImage, decryptCover, safeUrl } = __test__;
 
@@ -220,6 +228,44 @@ await testAsync('错误响应也带 CORS 头', async () => {
   const res = await call('/proxy/m3u8?url=bad');
   eq(res.status, 400);
   eq(res.headers.get('access-control-allow-origin'), '*');
+});
+
+/* ---------------- 部署路由（文件即路由） ----------------
+ * Makers 按 cloud-functions 的目录结构生成路由，入口文件漏一个，整段路径就会
+ * 落到静态兜底返回 index.html（200 + HTML），本地 dev server 因为直接调
+ * onRequest 反而一切正常 —— 这组用例就是拦这类「本地绿、线上 404/错内容」。
+ */
+
+test('入口 api/[[default]].js -> /api/*', () => {
+  ok(existsSync(path.join(FUNCTIONS_DIR, 'api', '[[default]].js')), '缺少 api/[[default]].js');
+  eq(typeof entryApi.onRequest, 'function');
+});
+
+test('入口 proxy/[[default]].js -> /proxy/*', () => {
+  ok(existsSync(path.join(FUNCTIONS_DIR, 'proxy', '[[default]].js')), '缺少 proxy/[[default]].js：/proxy/* 会掉进静态兜底返回 index.html');
+  eq(typeof entryProxy.onRequest, 'function');
+});
+
+test('入口 health.js -> /health', () => {
+  ok(existsSync(path.join(FUNCTIONS_DIR, 'health.js')), '缺少 health.js');
+  eq(typeof entryHealth.onRequest, 'function');
+});
+
+test('共享实现放在 _lib 下（下划线前缀不生成路由）', () => {
+  ok(existsSync(path.join(FUNCTIONS_DIR, '_lib', 'handler.js')), '缺少 _lib/handler.js');
+});
+
+test('三个入口指向同一份实现', () => {
+  ok(entryApi.onRequest === onRequest, 'api 入口未复用共享实现');
+  ok(entryProxy.onRequest === onRequest, 'proxy 入口未复用共享实现');
+  ok(entryHealth.onRequest === onRequest, 'health 入口未复用共享实现');
+});
+
+await testAsync('前端用到的 /proxy/* 都命中了路由而不是 404', async () => {
+  for (const p of ['/proxy/m3u8', '/proxy/key', '/proxy/ts', '/proxy/img']) {
+    const res = await call(p + '?url=bad');
+    ok(res.status !== 404, `${p} 未命中路由（返回 404，线上会掉进静态兜底）`);
+  }
 });
 
 /* ---------------- 汇总 ---------------- */

@@ -1,14 +1,17 @@
 /**
- * HGhub · EdgeOne Makers 云函数 —— 共享处理逻辑
+ * HGhub · EdgeOne Makers 云函数实现（共享模块，不直接对外）
  *
- * Makers 按文件路径路由：cloud-functions/<dir>/[[default]].js 只接管
- * <dir>/* 前缀。原来的逻辑全塞在 api/[[default]].js 里，导致只有 /api/* 进了
- * 函数，/proxy/m3u8、/proxy/img 在线上落到静态兜底返回 index.html（播放/封面
- * 全挂）。所以把逻辑抽到这里，由三个薄入口共享：
+ * Makers 是「文件即路由」：目录决定 URL，所以本文件不在任何入口位置，
+ * 由下面三个入口 import 复用（`_` 前缀的目录不生成路由）：
  *
- *   cloud-functions/api/[[default]].js    -> /api/*      （播放解析、上游反代）
- *   cloud-functions/proxy/[[default]].js  -> /proxy/*    （HLS 中转、封面解密）
- *   cloud-functions/health.js             -> /health
+ *   cloud-functions/api/[[default]].js    ->  /api/*      （含 /api/play、/api/prefip、反代）
+ *   cloud-functions/proxy/[[default]].js  ->  /proxy/*    （m3u8 / key / ts / img）
+ *   cloud-functions/health.js             ->  /health
+ *
+ * 注意：**光有 api/ 入口是不够的**。/proxy/* 没有对应入口时会落到静态兜底，
+ * 直接返回 index.html（200 + HTML），表现为「代理返回的不是清单/图片」。
+ *
+ * （静态资源由平台托管，根目录即静态根；本文件不处理静态资源）
  *
  * 它做四件事：
  *   1. POST /api/play     服务端调上游 playback，返回 HLS 清单地址
@@ -17,14 +20,17 @@
  *   3. GET  /proxy/img    拉加密封面 -> AES-128-CBC 解密 -> 返回真图片
  *   4. GET|POST /api/*    同源反代到上游 huangguoai.com
  *
- * 只依赖 node:crypto，无第三方包。
+ * 结构（自上而下）：常量 -> 缓存 -> 上游请求 -> 响应工具 -> 清单重写
+ *                 -> 各路由处理 -> 路由表 -> onRequest
+ *
+ * 注意：EdgeOne Makers 只部署 cloud-functions 目录，故本文件保持自包含、无第三方依赖。
  */
 
 import crypto from 'node:crypto';
 
 /* ============================ 常量 ============================ */
 
-const VERSION = '1.3.1';
+const VERSION = '1.3.2';
 const STARTED_AT = Date.now();
 const UPSTREAM = 'https://huangguoai.com';
 const USER_AGENT =
@@ -561,11 +567,8 @@ async function route(request, url) {
 
 /* ============================ 入口 ============================ */
 
-/**
- * 统一请求处理入口。api/[[default]].js、proxy/[[default]].js、health.js
- * 三个路由入口都转到这里，逻辑只有一份。
- */
-export async function handle(request) {
+export async function onRequest(context) {
+  const request = context && context.request;
   if (!request) return badRequest('missing request');
 
   let url;
@@ -588,11 +591,6 @@ export async function handle(request) {
       timeout ? 504 : 502,
     );
   }
-}
-
-/** Makers 运行时入口约定：context.request -> handle */
-export async function onRequest(context) {
-  return handle(context && context.request);
 }
 
 /* 供自测脚本直接调用的内部工具（不影响 Makers 运行时） */
