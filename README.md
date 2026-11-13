@@ -1,27 +1,55 @@
 # hghub-makers
 
-把 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)（HGhub 1.2.0 复刻：竖屏短剧网页 + 播放解析代理）改造到 **EdgeOne Makers** 上部署落地。
+把 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)（HGhub 复刻：竖屏短剧网页 + 播放解析代理）改造到 **EdgeOne Makers** 上部署。
 
-原项目靠**两个常驻 Python 进程 + openssl 命令行**跑在一台服务器上；本仓库把它改成
-**静态前端 + 单个 catch-all 云函数**，全部无状态、无需常驻进程、无需 openssl，可直接部署到 EdgeOne Makers。
+上游靠**两个常驻 Python 进程 + openssl 命令行**跑在一台服务器上；本仓库改成
+**静态前端 + 单个 catch-all 云函数**，全部无状态、无第三方依赖、无需 openssl。
 
-> 上游项目、前端页面、判定/解析逻辑全部来自 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)，
-> 本仓库只做 serverless 化改造。
+> 产品形态、上游接口、解密协议均来自 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)，版权归上游作者。
+> 本仓库只做 serverless 适配与工程化整理。
+
+当前版本：**1.3.0**
 
 ---
 
-## 架构对比
+## 这次修了什么
 
-| | 原项目 (hghub-clone) | 本仓库 (hghub-makers) |
+### 影响播放的硬伤
+
+| 问题 | 说明 | 修复 |
 |---|---|---|
-| 前端 | `web/index.html` + `hls.min.js` | `public/` 静态托管（Makers CDN） |
-| 播放解析代理 | `proxy/server.py`（8080，常驻） | 合并进 catch-all 函数 |
-| Web 反代 / 封面解密 | `web/server.py`（8081，常驻） | 合并进 catch-all 函数 |
-| 封面 AES 解密 | `openssl enc` 子进程 | `node:crypto`（serverless 无子进程） |
-| 运行时 | 2 个 stdlib Python 服务 | 1 个 Node.js 云函数 |
+| **代理线路其实不生效** | `/proxy/m3u8` 只转发清单，清单里的 `#EXT-X-KEY` 和分片仍是 `tp*.drleao.cn` 的绝对地址，浏览器拿到后照样直连被墙的 CDN，于是「切到代理线路」只是清单走了一次代理 | 新增 `rewriteManifest()`，把清单内所有 URI（key / 分片 / 嵌套清单 / `EXT-X-MAP`）改写成 `/proxy/{key,ts,m3u8}?url=…`，整条链路留在函数里 |
+| 分片不支持 Range | 代理整段下载，播放器无法局部读取/拖动 | 透传 `Range`，回 `206 + Content-Range + Accept-Ranges` |
+| 上游超时 → HTML 500 | 前端 `r.json()` 直接抛 `Unexpected token`，用户只看到「加载失败」 | `onRequest` 全包 try/catch，统一返回 JSON + CORS，超时给 504 |
+| 分片/清单无缓存头 | 每次起播都重新走一遍函数 | 清单 `no-cache`，分片 `max-age=86400`，封面 `max-age=604800, immutable` |
+| 解密失败也当图片返回 | 把密文当 `image/jpeg` 塞回去，浏览器显示破图 | 校验文件头，非图片返回 `415`，让前端走三级兜底 |
 
-前端 `index.html` **一行未改**：它本来就全走同源相对路径（`/api/play`、`/proxy/img`、`/api/*`），
-后端换成函数后路由不变。
+### 交互硬伤
+
+| 问题 | 说明 | 修复 |
+|---|---|---|
+| **榜单点不动** | 榜单条目字段是 `video_id`，前端只读 `id`，`openDetail(NaN)` | 统一用 `vidOf()` 读取（兼容 `id` / `video_id`） |
+| **分享链接指向别人站点** | 写死 `https://sp1.45678.eu.org/` | 改为当前站点 `location.origin + pathname` |
+| 分享的集数永远是第 1 集 | 分享按钮固定 `ep=1` | 按当前播放集 / 本地进度取 |
+| 深链 `ep=1` 不自动播 | 文案说「直接开播」，实际只停在详情 | `ep >= 1` 都直接起播 |
+| 一次点击触发 3 次 | 内联 `onclick` + 直接监听 + 文档级委托三处绑定，并发请求互相刷掉（分类点完 0 张卡） | 只保留一个文档级委托，删掉全部内联 `onclick` |
+| 详情右侧栏点收藏会顺带播放 | 点事件冒泡到 `#dCover` | 判断 `closest('.detail-rail')`；并修正 rail 自带 `data-fav` 导致的二次切换 |
+| 看第 150 集打开详情只显示 1–30 | 选集分段固定从 1 开始 | 分段自动跳到当前集所在区间 |
+| 进度写入风暴 | `timeupdate` 里 `%5===0` 会在一秒内连写 4 次 | 4 秒节流 + 暂停/隐藏/卸载时强制落盘 |
+| 起播失败永久黑屏 | 取播放地址失败只 catch 掉，没有任何提示 | 卡片上盖「点击重试」覆盖层，分页失败 3 秒自动重试 2 次 |
+| 分页竞态 | 旧请求回来把新列表刷空、把 loading 提前置 false | 每次分页一个状态快照 + `gen` 令牌，过期响应直接丢弃 |
+| 图片空 `src` | `#dCoverImg src=""` 会再请求一次当前页面 | 无封面时不写 `src` |
+| `poster` 与封面重复拉取 | 同一张封面被 `<img>` 和 `video poster` 各拉一次 | 去掉 poster，封面图在视频下层 |
+| IntersectionObserver 泄漏 | 每次刷新 feed 都重新 observe，旧节点永不解绑 | 重载时 `disconnect()` 并重建 |
+| 已移除的帖子页仍留代码 | 底部导航早没入口，代码还在跑 | 删除 posts 相关视图与请求 |
+
+### 其他完善
+
+- 视觉：底部信息与右侧操作栏改为同一行 flex 底对齐，删掉靠 `getBoundingClientRect` 反复量算的 `alignShare()`。
+- 无障碍：图标按钮补 `aria-label` / `aria-pressed`，弹窗 `role="dialog" aria-modal`，`Esc` 逐层关闭，卡片可键盘回车打开，`prefers-reduced-motion` 生效。
+- 移动端：浏览器**后退键**先关弹窗而不是退出站点；URL 同步 `?v=&ep=`，可直接分享/刷新恢复。
+- 缓存：浏览器 HTTP 缓存接管封面（省掉原来 Cache API + 二次 fetch 的一整套）。
+- 配置：版本号、APK 地址、hls.js 兜底 CDN 都收在 `app.js` 顶部常量；hls.js 缺失时按需异步加载，不再靠内联 `<script>`。
 
 ---
 
@@ -29,35 +57,43 @@
 
 ```
 hghub-makers/
-├── public/
-│   ├── index.html              # 前端（原样复用上游）
-│   └── hls.min.js              # 本地 hls.js（不依赖 CDN）
+├── public/                     # 静态资源（Makers CDN）
+│   ├── index.html              # 页面结构（无内联脚本/样式）
+│   ├── styles.css              # 样式
+│   ├── app.js                  # 前端逻辑（单文件 IIFE，按功能分区）
+│   ├── hls.min.js              # 本地 hls.js
+│   └── favicon.svg
 ├── cloud-functions/
-│   └── api/
-│       └── [[default]].js      # catch-all 云函数，承接全部动态路由
-├── server/dev.mjs              # 本地预览（模拟 Makers 静态优先 + 函数路由）
-├── scripts/selftest.mjs        # 自测（直接调函数，无需起服务）
-├── edgeone.json                # Makers 配置（maxDuration + 静态缓存头）
+│   └── api/[[default]].js      # catch-all 云函数（自包含，无依赖）
+├── server/dev.mjs              # 本地预览：静态优先 + 函数路由
+├── scripts/
+│   ├── selftest.mjs            # 离线单测（不联网）
+│   └── livetest.mjs            # 联网联调（真实上游 + CDN）
+├── edgeone.json                # maxDuration + 静态缓存头
 └── package.json
 ```
+
+前端拆成 HTML / CSS / JS 三个文件，`index.html` 从 1585 行降到 300 行左右：
+样式和脚本可以分别走 HTTP 缓存，改文案不用重新下载 100KB 内联脚本。
 
 ---
 
 ## 承接的路由
 
-catch-all 函数 `cloud-functions/api/[[default]].js` 覆盖前端用到的全部同源路径：
-
 | 路由 | 方法 | 作用 |
 |---|---|---|
-| `/api/play` | POST | 服务端调上游 playback，返回 HLS 清单地址（上游要求 body 为空 `{}`） |
-| `/proxy/m3u8` `/proxy/key` `/proxy/ts` `/proxy` | GET | 服务端拉 HLS 清单/密钥/分片再带 CORS 转发（只放行白名单 CDN 域） |
-| `/proxy/img` | GET | 拉加密封面 → AES-128-CBC 解密 → 返回真图片（带 LRU 缓存） |
-| `/api/prefip` | GET | 代拉 Cloudflare 优选 IP 列表（电信/联通/移动） |
-| `/api/up/*` `/api/edge/*` `/api/*` | GET/POST | 同源反代到上游 `huangguoai.com`（查询串原样透传） |
-| `/health` | GET | 健康检查 |
-| `/` `/hls.min.js` | GET | **静态托管**（不进函数，Makers 静态资源优先） |
+| `/api/play` | POST / GET | 服务端调上游 playback，返回 HLS 清单地址（上游要求 body 为 `{}`） |
+| `/proxy/m3u8` | GET | 拉清单 → **重写内部 URI** → 带 CORS 返回 |
+| `/proxy/key` | GET | 拉 AES 密钥并转发 |
+| `/proxy/ts` | GET | 拉分片并转发（支持 Range） |
+| `/proxy/img` | GET | 拉加密封面 → AES-128-CBC 解密 → 返回真图片（LRU + 浏览器长缓存） |
+| `/api/prefip` | GET | 代拉 Cloudflare 优选 IP（电信/联通/移动） |
+| `/api/up/*`、`/api/*` | GET/POST | 同源反代到上游 `huangguoai.com`，查询串原样透传 |
+| `/health` | GET | 健康检查（版本、运行时长、图片缓存占用） |
+| `/`、`/app.js`、`/styles.css`、`/hls.min.js` | GET | 静态托管（不进函数） |
 
-转发类接口只放行白名单域名（`.drleao.cn` / `.hzjvlo.cn` / `huangguoai.com` 等），防止被当任意代理滥用。
+转发类接口只放行白名单域名（`.hzjvlo.cn` / `.drleao.cn` / `.aluxvl.cn` / `huangguoai.com`），
+并显式拒绝 `localhost`、`127.*`、`10.*`、`192.168.*`、`172.16–31.*`、`169.254.*` 等内网地址。
 
 ---
 
@@ -66,9 +102,9 @@ catch-all 函数 `cloud-functions/api/[[default]].js` 覆盖前端用到的全�
 1. 登录 [EdgeOne Makers 控制台](https://console.tencentcloud.com/edgeone/makers)。
 2. 新建项目 → 从 Git 仓库导入 → 选本仓库。
 3. 构建配置保持默认（`public/` 为静态根，`cloud-functions/` 自动识别函数）。
-4. 部署完成后访问分配的域名即可。
+4. 部署完成后访问分配的域名。
 
-CLI 方式：
+CLI：
 
 ```bash
 npm i -g edgeone
@@ -81,29 +117,49 @@ edgeone pages deploy
 ## 本地开发
 
 ```bash
-npm run preview      # http://localhost:8787（模拟 Makers 静态优先 + 函数路由）
-npm test             # 自测：直接调函数，覆盖全部关键路由，无需起服务
+npm run preview      # http://localhost:8787（PORT=8788 可改端口）
+npm test             # 离线单测：清单重写 / 白名单 / 解密 / 路由契约，21 项
+npm run test:live    # 联网联调：真实上游 + CDN，11 项
 ```
 
-自测会真实访问上游与 CDN，需要联网。预期输出 `8/8 通过`。
+`npm test` 不联网、秒级返回，适合每次改完就跑。
+`npm run test:live` 会真实拉一次清单、密钥、分片和封面（约 2–3MB），用于确认上游接口没变。
 
 ---
 
-## 关键改造说明
+## 关键技术点
 
-**封面为什么要在服务端解密**：上游图床 `pic.drleao.cn` 下发的封面不是图片，而是一串
-AES 加密字节（无 JPEG/PNG 文件头），浏览器直接当 `<img src>` 永远显示不出来。上游自己的
-解密协议是公开的（`crypto-image-protocol.js`）：AES-128-CBC、无填充、key/iv 写死。原项目用
-`openssl enc` 子进程解密，但 serverless 环境不允许起子进程，本仓库改用 `node:crypto` 的
-`createDecipheriv('aes-128-cbc', ...)` + `setAutoPadding(false)`，结果一致（解出 `ffd8ffe0` 真 JPEG）。
+**为什么要重写 m3u8**：代理存在的意义就是「浏览器连不上 CDN 时也能播」。只转发清单
+不重写 URI，浏览器解析清单后仍会去连 `tp2.drleao.cn`——代理等于白做。重写后所有请求
+都回到同源 `/proxy/*`，由函数代取，签名参数原样保留。
 
-**两个服务为什么能合并**：8080 播放代理和 8081 Web 反代都是纯转发 + 解密，无状态、不互相依赖
-（8081 原本只是把 `/proxy/*` 再转发给 8080）。合并成一个 catch-all 函数后，少一跳内网转发。
+**为什么封面要在服务端解密**：上游图床下发的「封面」不是图片，而是一串 AES 密文
+（没有 JPEG/PNG 文件头），浏览器当 `<img src>` 永远显示不出来。上游协议公开
+（`crypto-image-protocol.js`）：AES-128-CBC、无填充、key/iv 写死。原项目用 `openssl enc`
+子进程，serverless 不允许起子进程，这里换 `node:crypto` 的
+`createDecipheriv('aes-128-cbc', …)` + `setAutoPadding(false)`，解出 `ffd8ff` 真 JPEG。
+
+**两个服务为什么能合并**：8080 播放代理和 8081 Web 反代都是纯转发 + 解密，无状态、
+互不依赖（8081 原本只是把 `/proxy/*` 再转发给 8080）。合并成一个 catch-all 后少一跳内网转发。
+
+**前端为什么只用一套事件绑定**：内联 `onclick` + `addEventListener` + 文档级委托三套并存时，
+同一次点击会跑 2–3 次，`loadCats()` 并发的结果互相覆盖，表现就是「点了没反应」。
+现在只有一个委托入口，`data-*` 决定行为。
+
+---
+
+## 已知限制
+
+- 上游 `playback` 返回的 `cdn.authKey`（`x-cdn-auth`）目前不需要也能取到清单/分片；如某天
+  CDN 开始强制校验，需要在 `handleMedia` 里补这个请求头。
+- 分类 25/26/27 在上游当前是空的（只有 24 有内容），前端会显示「该分类暂无内容」。
+- 榜单接口只返回前 20 名且不支持翻页。
+- 本地账号仅存在 `localStorage`，不参与任何服务端校验，用途是记录收藏/历史归属。
 
 ---
 
 ## 许可与致谢
 
-- 前端、解析逻辑、产品形态全部来自 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)，版权归上游作者。
-- 本仓库仅做 EdgeOne Makers 的 serverless 适配。
+- 前端形态、解析逻辑、产品设计全部来自 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)。
+- 本仓库仅做 EdgeOne Makers 的 serverless 适配与工程整理。
 - 数据与播放源来自上游 `huangguoai.com`，仅供学习研究，请勿用于商业用途。
