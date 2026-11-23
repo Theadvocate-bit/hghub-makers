@@ -8,7 +8,25 @@
 > 产品形态、上游接口、解密协议均来自 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)，版权归上游作者。
 > 本仓库只做 serverless 适配与工程化整理。
 
-当前版本：**1.3.3**
+当前版本：**1.3.4**
+
+---
+
+## 1.3.4 修了什么
+
+| 问题 | 说明 | 修复 |
+|---|---|---|
+| **详情封面三级兜底失效** | `#dCoverImg` 同时挂了目标级和文档捕获级两个 error 监听，同一事件把 `coverErr` 跑两遍：第一层刚把 src 换成直连地址，第二层立刻换成占位图，中间那级永远试不到 | 删掉目标级监听，只留捕获级（img 带 `data-raw`，捕获级已覆盖） |
+| **详情弹窗竞态** | 快速连点两张卡片，先发出的旧请求后返回，把新剧详情整个覆盖（旧标题 + 新 videoId 错位） | `openDetail` 的 then/catch 里校验 `state.videoId === id`，过期响应整体丢弃 |
+| **原生 HLS 换源残留监听** | Safari 路径的 `error` 监听只在触发时摘掉；切集后旧监听还在，新源一出错会把**上一集**的地址重新塞回来 | `setPlayerSource` 开头统一摘掉旧监听（`nativeHlsErr`），`destroyPlayer` 一并清理 |
+| **评论面板竞态** | 快速切换两部剧的评论，旧响应渲染进新剧的面板 | 渲染前校验 `#commentSheet.dataset.vid` |
+| **优选 IP 解析过严** | 正则要求 IP 和 `#` 之间必须有空白，`IP#备注` 格式一行都解析不出，永远「暂无优选 IP」 | 逐行取 `#` 前半段、整段校验 IPv4（`parsePrefipText`），三种行格式都兼容，离线单测锁死 |
+| **榜单排名号未转义** | `v.rank` 来自上游，直接拼 HTML | 过 `esc()` |
+
+优化：
+
+- hls.js fatal 的**媒体错误**（解码失败）不再触发「永久切换线路」——先按官方建议 `recoverMediaError()` 自救，只有**网络错误**才值得换线；旧版一次解码失败就把用户写死到代理线路。
+- `/api/prefip` 加 in-flight 合并：缓存过期瞬间并发来 N 个请求只拉一次上游（旧版 N×3 次）。
 
 ---
 
@@ -165,7 +183,7 @@ edgeone pages deploy
 
 ```bash
 npm run preview      # http://localhost:8787（PORT=8788 可改端口）
-npm test             # 离线单测：清单重写 / 白名单 / 解密 / 路由契约 / 入口检查 / 榜单标签，28 项
+npm test             # 离线单测：清单重写 / 白名单 / 解密 / 路由契约 / 入口检查 / 榜单标签 / 优选 IP，30 项
 npm run test:live    # 联网联调：真实上游 + CDN，13 项
 ```
 

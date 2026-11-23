@@ -14,7 +14,7 @@
 
   /* ============================== 常量 ============================== */
 
-  var APP_VERSION = '1.3.3';
+  var APP_VERSION = '1.3.4';
   /* 分享面板里的「下载 App」地址：发新版只改这里 */
   var APK_URL = 'https://github.com/vps1986/hghub-clone/releases/download/v1.2.0.8/HGhub-1.2.0.8.apk';
   /* 本机没带 hls.js 时的兜底 CDN（原版是内联 script 加载，这里改成运行时按需加载） */
@@ -578,10 +578,16 @@
       hls.attachMedia(video);
       hls.on(window.Hls.Events.ERROR, function (evt, data) {
         if (!data || !data.fatal) return;
+        /* 媒体错误与线路无关：先 recoverMediaError 自救（旧版把任何 fatal
+           都当成 CDN 挂了，一次解码失败就把用户永久写死到代理线路） */
+        if (window.Hls.ErrorTypes && data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
+          try { hls.recoverMediaError(); return; } catch (e) {}
+        }
         try { hls.destroy(); } catch (e) {}
         delete slideHls[id];
-        // 直连失败 -> 永久切到代理线路再试一次；代理也失败才报错
-        if (store.get('hg_line', 'direct') === 'direct') {
+        // 网络错误且当前是直连 -> 永久切到代理线路再试一次；代理也失败才报错
+        if (window.Hls.ErrorTypes && data.type === window.Hls.ErrorTypes.NETWORK_ERROR &&
+            store.get('hg_line', 'direct') === 'direct') {
           store.set('hg_line', 'proxy');
           if (state.slideId === id) attachSlide(el, id, src);
         } else {
@@ -922,6 +928,7 @@
     if (state.hls) { try { state.hls.destroy(); } catch (e) {} state.hls = null; }
     var v = $('#video');
     if (!v) return;
+    if (nativeHlsErr) { try { v.removeEventListener('error', nativeHlsErr); } catch (e) {} nativeHlsErr = null; }
     try { v.pause(); } catch (e) {}
     v.removeAttribute('src');
     try { v.load(); } catch (e) {}
@@ -981,6 +988,9 @@
     pushModalState();
 
     return api('/api/videos/' + id).then(function (j) {
+      /* 竞态防护：用户已点开另一部剧时，这个过期响应必须整个丢弃，
+         否则旧请求后到，会把「新剧的 videoId + 旧剧的标题/封面」错位渲染出来 */
+      if (state.videoId !== id) return;
       var d = j.data || j;
       if (!d || !vidOf(d)) throw new Error('数据为空');
       state.detail = d;
@@ -993,6 +1003,7 @@
       syncModalUrl();
       addHistory({ id: id, title: d.title, cover: d.cover }, state.ep);
     }).catch(function (err) {
+      if (state.videoId !== id) return;
       $('#pTitle').textContent = '加载失败';
       $('#pMeta').textContent = (err && err.message) || '';
       $('#pEps').innerHTML = '<button class="btn" type="button" data-retry-detail="' + id + '">点击重试</button>';
@@ -1178,9 +1189,15 @@
     });
   }
 
+  var nativeHlsErr = null; /* 原生 HLS 路径的 error 监听，换源时必须摘掉（见 setPlayerSource） */
+
   function setPlayerSource(src, tried) {
     var v = $('#video');
     if (!v || !src) return;
+    /* 关键：上一集挂在 video 上的 error 监听必须先移除。
+       旧版只在它自己触发时才移除，切集后旧监听还挂着，新源一出错
+       会把上一集的地址重新 setPlayerSource 回来，画面直接跳回上一集。 */
+    if (nativeHlsErr) { v.removeEventListener('error', nativeHlsErr); nativeHlsErr = null; }
     var line = store.get('hg_line', 'direct');
     var url = line === 'proxy' ? '/proxy/m3u8?url=' + encodeURIComponent(src) : src;
 
@@ -1193,6 +1210,11 @@
       hls.attachMedia(v);
       hls.on(window.Hls.Events.ERROR, function (evt, data) {
         if (!data || !data.fatal || tried) return;
+        /* 媒体错误与线路无关：先按官方建议 recoverMediaError 自救，
+           只有网络错误才值得切线路（旧版任何 fatal 都会永久改掉线路设置） */
+        if (window.Hls.ErrorTypes && data.type === window.Hls.ErrorTypes.MEDIA_ERROR) {
+          try { hls.recoverMediaError(); return; } catch (e) {}
+        }
         var next = line === 'direct' ? 'proxy' : 'direct';
         toast((line === 'direct' ? '直连' : '代理') + '线路失败，切换' + (next === 'direct' ? '直连' : '代理') + '…');
         store.set('hg_line', next);
@@ -1204,12 +1226,14 @@
       v.src = url;
       var p2 = v.play();
       if (p2 && p2.catch) p2.catch(function () {});
-      v.addEventListener('error', function onErr() {
+      nativeHlsErr = function onErr() {
         v.removeEventListener('error', onErr);
+        if (nativeHlsErr === onErr) nativeHlsErr = null;
         if (tried) return;
         store.set('hg_line', line === 'direct' ? 'proxy' : 'direct');
         setPlayerSource(src, true);
-      });
+      };
+      v.addEventListener('error', nativeHlsErr);
     } else {
       v.src = url;
       toast('当前浏览器不支持 HLS 播放');
@@ -1254,6 +1278,8 @@
     }).catch(function () {
       return [];
     }).then(function (items) {
+      /* 竞态防护：面板已切到另一部剧时丢弃过期响应，防止评论串台 */
+      if ($('#commentSheet').dataset.vid !== String(id)) return;
       var local = store.get('hg_comments_' + id, []);
       var html = '';
 
@@ -1442,7 +1468,7 @@
         if (eps) meta.push(eps + '集');
         if (v.score) meta.push((+v.score).toFixed(1) + ' 分');
         return '<div class="rankrow" data-detail="' + id + '" role="button" tabindex="0">' +
-          '<div class="no">' + (v.rank || (i + 1)) + '</div>' +
+          '<div class="no">' + esc(v.rank || (i + 1)) + '</div>' +
           coverImg(v.cover, '', v.title) +
           '<div><h4>' + esc(v.title || '') + '</h4>' +
           '<p>' + esc(meta.join(' · ')) + '</p></div></div>';
@@ -1912,9 +1938,10 @@
     $('#btnSysShare').addEventListener('click', systemShare);
     $('#btnDownloadApp').addEventListener('click', function () { location.href = APK_URL; });
 
-    $('#dCoverImg').addEventListener('error', function () { coverErr(this); });
-
-    /* 资源加载失败不冒泡，只能靠捕获阶段统一兜底（原来靠行内 onerror） */
+    /* 资源加载失败不冒泡，只能靠捕获阶段统一兜底（原来靠行内 onerror）。
+       注意：#dCoverImg 不再单独绑 error —— 捕获级监听已经覆盖它（img 带 data-raw），
+       旧版两层监听对同一事件各跑一次 coverErr，第一层刚切到直连地址、
+       第二层立刻把它换成占位图，三级兜底的中间一级永远试不到。 */
     document.addEventListener('error', function (e) {
       var t = e.target;
       if (t && t.tagName === 'IMG' && t.hasAttribute('data-raw')) coverErr(t);
