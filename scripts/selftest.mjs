@@ -19,7 +19,7 @@ import * as entryHealth from '../cloud-functions/health.js';
 const FUNCTIONS_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../cloud-functions');
 const ROOT = path.resolve(FUNCTIONS_DIR, '..');
 
-const { rewriteManifest, hostAllowed, sniffImage, decryptCover, safeUrl } = __test__;
+const { rewriteManifest, hostAllowed, sniffImage, decryptCover, safeUrl, parsePrefipText } = __test__;
 
 /* ---------------- 迷你断言框架 ---------------- */
 
@@ -291,6 +291,26 @@ test('榜单标签与 app.js 白名单一一对应', () => {
   ok(tabs.length > 0, '没有解析到榜单标签');
   for (const t of tabs) ok(allowed.includes(t), `标签 ${t} 不在 app.js 白名单里，上游会返回「榜单不存在」`);
   for (const t of allowed) ok(tabs.includes(t), `白名单里的 ${t} 没有对应标签（死配置）`);
+});
+
+/* ---------------- 优选 IP 解析 ---------------- */
+
+test('优选 IP：兼容 IP#备注 / IP #备注 / 裸 IP 三种行格式', () => {
+  const text = [
+    '104.16.1.1#hk1',        // 无空格
+    '104.16.1.2 #hk2',       // 有空格
+    '104.16.1.3',            // 裸 IP
+    '104.16.1.4#104.16.1.4', // # 后也是 IP，只取前半段
+    '',
+    'error code: 1034',      // 上游报错页
+  ].join('\n');
+  eq(JSON.stringify(parsePrefipText(text)), JSON.stringify(['104.16.1.1', '104.16.1.2', '104.16.1.3', '104.16.1.4']));
+});
+
+test('优选 IP：去重 + 拒绝非 IP 行', () => {
+  eq(JSON.stringify(parsePrefipText('1.2.3.4\n1.2.3.4\n#1.2.3.5\nv1.2.3.4\n')), JSON.stringify(['1.2.3.4']));
+  eq(JSON.stringify(parsePrefipText('')), JSON.stringify([]));
+  eq(JSON.stringify(parsePrefipText(null)), JSON.stringify([]));
 });
 
 /* ---------------- 汇总 ---------------- */

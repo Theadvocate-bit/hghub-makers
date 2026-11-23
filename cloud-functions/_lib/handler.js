@@ -30,7 +30,7 @@ import crypto from 'node:crypto';
 
 /* ============================ 常量 ============================ */
 
-const VERSION = '1.3.3';
+const VERSION = '1.3.5';
 const STARTED_AT = Date.now();
 const UPSTREAM = 'https://huangguoai.com';
 const USER_AGENT =
@@ -41,15 +41,16 @@ const TIMEOUT = { api: 15000, play: 20000, media: 20000, image: 15000, prefip: 8
 
 /**
  * 媒体中转白名单。
- * 清单在 yd-lphu-long.hzjvlo.cn，密钥/分片散落在 tp1/tp2/tp4/tp8.drleao.cn
- * 等多台机器上，所以按后缀放行而不是逐个列主机（写死会被新机器打穿）。
+ * 清单域名会变（yd-lphu-long.hzjvlo.cn / yd-lphu-hls.tjyyjk.cn …），
+ * 密钥/分片散落在 tp*.drleao.cn / tp*.qnlycc.cn 等多台机器上，
+ * 所以按后缀放行而不是逐个列主机（写死会被新机器打穿）。
  */
 const MEDIA_HOSTS = new Set(['huangguoai.com', 'huangguoai.ai']);
-const MEDIA_SUFFIXES = ['.hzjvlo.cn', '.drleao.cn'];
+const MEDIA_SUFFIXES = ['.hzjvlo.cn', '.drleao.cn', '.tjyyjk.cn', '.qnlycc.cn'];
 
 /** 图片中转白名单（图床）。 */
-const IMG_HOSTS = new Set(['huangguoai.com', 'pic.drleao.cn', 'new.drleao.cn', 'new2.drleao.cn', 'image.drleao.cn', 'pic.aluxvl.cn']);
-const IMG_SUFFIXES = ['.drleao.cn', '.aluxvl.cn'];
+const IMG_HOSTS = new Set(['huangguoai.com', 'pic.drleao.cn', 'new.drleao.cn', 'new2.drleao.cn', 'image.drleao.cn', 'pic.aluxvl.cn', 'pic.qnlycc.cn']);
+const IMG_SUFFIXES = ['.drleao.cn', '.aluxvl.cn', '.qnlycc.cn'];
 
 /** 本机/内网地址一律拒绝，避免白名单以外的 SSRF 变体。 */
 const PRIVATE_HOST =
@@ -451,6 +452,20 @@ async function handleImage(request, url) {
   return json({ status: 0, msg: 'not an image' }, 415);
 }
 
+/**
+ * 解析优选 IP 文本。上游格式不固定（`1.2.3.4 #备注`、`1.2.3.4#1.2.3.4`、裸 IP 一行），
+ * 旧版正则 /IP\s*#/ 要求 IP 和 # 之间必须有空白，遇到 `IP#xxx` 一行都解析不出来，
+ * 结果永远是「暂无优选 IP」。改成逐行取 `#` 前的部分，整段必须是合法 IPv4 才收。
+ */
+function parsePrefipText(text) {
+  const out = [];
+  for (const line of String(text || '').split(/\r?\n/)) {
+    const head = line.split('#')[0].trim();
+    if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(head)) out.push(head);
+  }
+  return [...new Set(out)];
+}
+
 /** 优选 IP：由函数代拉 cf.090227.xyz 并解析成 JSON（浏览器直接拉会被 CORS 挡）。 */
 async function prefipList(isp) {
   try {
@@ -460,25 +475,31 @@ async function prefipList(isp) {
     });
     if (!res.ok) return [];
     const text = await res.text();
-    const ips = [...text.matchAll(/(\d{1,3}(?:\.\d{1,3}){3})\s*#/g)].map((m) => m[1]);
-    return [...new Set(ips)];
+    return parsePrefipText(text);
   } catch {
     return [];
   }
 }
 
+let prefipInflight = null;
+
 async function prefipAll() {
   const now = Date.now();
   if (prefipCache.data && now - prefipCache.at < PREFIP_TTL) return prefipCache.data;
-
-  const [ct, cu, cmcc] = await Promise.all([prefipList('ct'), prefipList('cu'), prefipList('cmcc')]);
-  const data = { ct, cu, cmcc };
-  // 全空说明上游挂了：不缓存，下次请求继续重试。
-  if (ct.length || cu.length || cmcc.length) {
-    prefipCache.at = now;
-    prefipCache.data = data;
+  // in-flight 合并：缓存过期瞬间来 3 个请求只拉一次上游（旧版会并发拉 3×3 次）
+  if (!prefipInflight) {
+    prefipInflight = (async () => {
+      const [ct, cu, cmcc] = await Promise.all([prefipList('ct'), prefipList('cu'), prefipList('cmcc')]);
+      const data = { ct, cu, cmcc };
+      // 全空说明上游挂了：不缓存，下次请求继续重试。
+      if (ct.length || cu.length || cmcc.length) {
+        prefipCache.at = Date.now();
+        prefipCache.data = data;
+      }
+      return data;
+    })().finally(() => { prefipInflight = null; });
   }
-  return data;
+  return prefipInflight;
 }
 
 /** 同源反代到上游：/api/up/*、/api/edge/*、/api/videos、/api/search … 查询串原样透传。 */
@@ -594,4 +615,4 @@ export async function onRequest(context) {
 }
 
 /* 供自测脚本直接调用的内部工具（不影响 Makers 运行时） */
-export const __test__ = { rewriteManifest, proxyUri, hostAllowed, sniffImage, decryptCover, safeUrl };
+export const __test__ = { rewriteManifest, proxyUri, hostAllowed, sniffImage, decryptCover, safeUrl, parsePrefipText };

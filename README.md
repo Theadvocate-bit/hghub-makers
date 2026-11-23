@@ -8,7 +8,15 @@
 > 产品形态、上游接口、解密协议均来自 [vps1986/hghub-clone](https://github.com/vps1986/hghub-clone)，版权归上游作者。
 > 本仓库只做 serverless 适配与工程化整理。
 
-当前版本：**1.3.4**
+当前版本：**1.3.5**
+
+---
+
+## 1.3.5 修了什么
+
+| 问题 | 说明 | 修复 |
+|---|---|---|
+| **封面 / 播放代理全部 403** | 上游 CDN 域名已切换：封面 \`pic.qnlycc.cn\`、清单 \`yd-lphu-hls.tjyyjk.cn\`、密钥/分片 \`tp*.qnlycc.cn\`，旧白名单只有 \`.drleao.cn\` / \`.hzjvlo.cn\` 等，\`hostAllowed\` 一律拒绝 | 媒体后缀增加 \`.tjyyjk.cn\`、\`.qnlycc.cn\`；图床增加 \`pic.qnlycc.cn\` 与 \`.qnlycc.cn\` 后缀，保留旧域名兼容 |
 
 ---
 
